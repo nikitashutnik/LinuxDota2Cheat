@@ -1,0 +1,14 @@
+# in-source CMake build
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+build/
+*.o
+*.so
+
+# editors, debugging
+.vscode/
+.idea/
+gdb.txt
+.gdb_history

@@ -1,0 +1,15 @@
+[Unit]
+Description=Dota2Helper auto-inject watcher
+
+[Service]
+# Path to your clone
+ExecStart=%h/Dota2Helper/watch.sh
+# Set this if your Steam library is not in ~/.local/share/Steam
+#Environment="DOTA_DIR=/mnt/games/SteamLibrary/steamapps/common/dota 2 beta/game/bin/linuxsteamrt64"
+Restart=always
+RestartSec=5
+StandardOutput=append:/tmp/d2h_watch.log
+StandardError=append:/tmp/d2h_watch.log
+
+[Install]
+WantedBy=default.target

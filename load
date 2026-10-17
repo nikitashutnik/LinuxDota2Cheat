@@ -1,0 +1,3 @@
+#!/bin/bash
+# Manual injection: same as what the d2h-watch service does automatically (no sudo needed with ptrace_scope = 0).
+exec "$(cd "$(dirname "$0")" && pwd)/inject.sh"
