@@ -1,8 +1,6 @@
 #include "Hooks.h"
 
-#include <algorithm>
 #include <cstring>
-#include <deque>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -113,17 +111,16 @@ static int EntityIndex( uint32_t netHandle ) { return netHandle & 0x3fff; }
 struct Create
 {
     uint64_t nameIndex = 0;
-    uint32_t entity = kInvalidHandle, forModifiers = kInvalidHandle; // CEHandle: entity index in the low 15 bits
+    uint32_t entity = kInvalidHandle, forModifiers = kInvalidHandle;
     long createdMs = 0;
-    std::string name;      // resolved once the client builds the collection
+    std::string name;      // known once the client has built a collection with this resource id
     bool hasPos = false, reported = false;
     float pos[3] = {};
 };
 
 static std::mutex guard;
 static std::unordered_map<uint32_t, Create> creates;           // live net particle index -> its create
-static std::deque<uint32_t> unpaired;                          // creates the client has not built a collection for yet, in order
-static std::unordered_map<uint64_t, std::string> namesByIndex; // particle_name_index -> resource name
+static std::unordered_map<uint64_t, std::string> namesByIndex; // particle resource id -> resource name
 static std::unordered_map<int, float> channelByHero;           // hero entity index -> teleport channel seconds (cp7.x of the start effect)
 
 // A teleport destination effect: a world-origin "teleport_end" system whose modifiers come from the teleporting hero
@@ -155,10 +152,8 @@ static void HandleParticleManager( const uint8_t* payload, int len, long t )
 
     std::lock_guard<std::mutex> lock( guard );
     if( type == CREATE && bodyField == 4 ){
-        if( creates.size() > 4096 ){ // a leak of never-destroyed indices; start over
+        if( creates.size() > 4096 ) // a leak of never-destroyed indices; start over
             creates.clear();
-            unpaired.clear();
-        }
         Create c;
         c.createdMs = t;
         while( Field( body, num, wire, v, sub ) ){
@@ -170,7 +165,6 @@ static void HandleParticleManager( const uint8_t* payload, int len, long t )
         if( known != namesByIndex.end() )
             c.name = known->second;
         creates[idx] = c;
-        unpaired.push_back( idx );
     } else if( type == UPDATE_TRANSFORM && bodyField == 30 ){
         auto it = creates.find( idx );
         if( it == creates.end() )
@@ -203,36 +197,20 @@ static void HandleParticleManager( const uint8_t* payload, int len, long t )
             LastSeen::OnTeleportEnd( hero, completed );
         }
         creates.erase( it );
-        unpaired.erase( std::remove( unpaired.begin(), unpaired.end(), idx ), unpaired.end() );
     }
 }
 
-// The client builds exactly one collection per CREATE, in message order, so the oldest unpaired create is this collection's.
-// shortcut: a client-side effect built between two creates pairs with the wrong one; a known name_index catches most of those
-void NetParticles::OnCollectionCreated( const char* name )
+// The binding's resource id is the particle_name_index of the net messages, so one built collection names every create of that system
+void NetParticles::OnCollectionCreated( uint64_t resourceId, const char* name )
 {
-    long now = Util::GetEpochMs();
     std::lock_guard<std::mutex> lock( guard );
-    while( !unpaired.empty() ){
-        uint32_t idx = unpaired.front();
-        unpaired.pop_front();
-        auto it = creates.find( idx );
-        if( it == creates.end() || now - it->second.createdMs > 2000 )
-            continue;
-        Create& c = it->second;
-        auto known = namesByIndex.find( c.nameIndex );
-        if( known != namesByIndex.end() ){
-            c.name = known->second;
-            MaybeReport( c );
-            if( known->second != name )
-                continue;
-            return;
-        }
-        namesByIndex[c.nameIndex] = name;
-        c.name = name;
-        MaybeReport( c );
+    if( !namesByIndex.emplace( resourceId, name ).second )
         return;
-    }
+    for( auto& kv : creates )
+        if( kv.second.nameIndex == resourceId && kv.second.name.empty() ){
+            kv.second.name = name;
+            MaybeReport( kv.second );
+        }
 }
 
 bool Hooks::UnserializeMessage( CNetworkMessages* thisptr, bf_read* buf, void* msg, void* err )

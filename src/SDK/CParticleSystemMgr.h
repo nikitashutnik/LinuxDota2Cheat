@@ -23,7 +23,8 @@ struct WeakHandleContents_InfoForResourceTypeIParticleSystemDefinition
 {
     CParticleSystemDefinition* systemDefinition;
     InfoStruct *info;
-    char _pad[0x200];
+    uint64_t resourceId; // what CUserMsg_ParticleManager carries as particle_name_index
+    char _pad[0x1f8];
 };
 // this is real sloppy :(
 struct CWeakHandle_InfoForResourceTypeIParticleSystemDefinition

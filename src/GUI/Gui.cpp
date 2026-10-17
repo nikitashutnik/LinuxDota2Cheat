@@ -71,11 +71,42 @@ D2H_timer=function(p,id,m,cx,top,w,fs){
   if(lb.text!=t) lb.text=t;
   lb.style.position=(cx-w/2)+'px '+top+'px 0px'; lb.visible=true;
 };
+// ability icons with cooldown seconds under every living hero on screen; fogged enemies (D2H_hidden) carry stale data and are skipped
+D2H_cds=function(g){
+  var heroes=Entities.GetAllHeroEntities(), me=Players.GetPlayerHeroEntityIndex(Players.GetLocalPlayer());
+  for(var h=0;h<heroes.length;h++){
+    var e=heroes[h];
+    if(e==me||D2H_hidden[e]||!Entities.IsAlive(e)||Entities.IsIllusion(e)) continue;
+    var o=Entities.GetAbsOrigin(e), x=Game.WorldToScreenX(o[0],o[1],o[2]), y=Game.WorldToScreenY(o[0],o[1],o[2]);
+    if(!(x>=0&&y>=0&&x<=Game.GetScreenWidth()&&y<=Game.GetScreenHeight())) continue;
+    var id='cd'+e, row=g.FindChild(id);
+    if(!row){ row=$.CreatePanel('Panel',g,id); row.hittest=false; row.hittestchildren=false; row.style.flowChildren='right'; }
+    var n=Entities.GetAbilityCount(e), k=0;
+    for(var s=0;s<n;s++){
+      var a=Entities.GetAbility(e,s);
+      if(a==-1||Abilities.IsHidden(a)||Abilities.IsPassive(a)||Abilities.IsAttributeBonus(a)) continue;
+      var ic=row.GetChild(k);
+      if(!ic){ ic=$.CreatePanel('DOTAAbilityImage',row,''); ic.hittest=false; var st=ic.style; st.width=st.height='24px'; st.marginRight='2px';
+        var lb=$.CreatePanel('Label',ic,''); lb.hittest=false; var ls=lb.style; ls.width='100%'; ls.height='100%'; ls.textAlign='center'; ls.verticalAlign='center'; ls.fontSize='15px'; ls.fontWeight='bold'; ls.color='#ffffff'; ls.textShadow='0px 0px 3px 4.0 #000000';
+        var pp=$.CreatePanel('Panel',ic,''); pp.hittest=false; var ps=pp.style; ps.flowChildren='right'; ps.horizontalAlign='center'; ps.verticalAlign='bottom'; ps.marginBottom='1px'; }
+      var nm=Abilities.GetAbilityName(a); if(ic.abilityname!=nm) ic.abilityname=nm;
+      var cd=Abilities.GetCooldownTimeRemaining(a), t=cd>0?''+Math.ceil(cd):'', lb=ic.GetChild(0);
+      if(lb.text!=t) lb.text=t;
+      var lv=Abilities.GetLevel(a), mx=Abilities.GetMaxLevel(a), pp=ic.GetChild(1), key=lv+'/'+mx; // level pips like the ability bar
+      if(pp.D2H_key!=key){ pp.D2H_key=key; pp.RemoveAndDeleteChildren();
+        for(var i=0;i<mx;i++){ var q=$.CreatePanel('Panel',pp,''); var qs=q.style; qs.width='4px'; qs.height='3px'; qs.marginRight='1px'; qs.backgroundColor=i<lv?'#f0c030':'#303030'; } }
+      ic.style.saturation=lv>0?'1':'0'; ic.style.opacity=cd>0?'0.45':'1'; ic.visible=true; k++;
+    }
+    for(var r=k;r<row.GetChildCount();r++) row.GetChild(r).visible=false;
+    row.style.position=(x/g.actualuiscale_x-k*13)+'px '+(y/g.actualuiscale_y+28)+'px 0px'; row.visible=true;
+  }
+};
 D2H_ground=function(){
   var g=D2H_g, shown='';
   if(!(g&&g.IsValid()&&g.actualuiscale_x)) return;
   try{
     for(var i=0;i<g.GetChildCount();i++) g.GetChild(i).visible=false;
+    D2H_cds(g);
     if(D2H_cfg.on) D2H_marks.forEach(function(m){
       var x=Game.WorldToScreenX(m.x,m.y,m.z), y=Game.WorldToScreenY(m.x,m.y,m.z);
       if(!(x>=0&&y>=0&&x<=Game.GetScreenWidth()&&y<=Game.GetScreenHeight())) return;
@@ -225,7 +256,7 @@ void UI::RunDevScript()
 	RunJS( ContextPanel(), WithConfig( js ).c_str() );
 }
 
-void UI::PushMarkers( const char* marksJsArray )
+void UI::PushMarkers( const char* marksJsArray, const char* hiddenJsObject )
 {
 	static panorama::IUIPanel* last = nullptr;
 	panorama::IUIPanel* hud = HudPanel();
@@ -234,7 +265,7 @@ void UI::PushMarkers( const char* marksJsArray )
 		Logger::Log( "markers: HUD context %p", (void*)hud );
 	}
 	if( hud )
-		RunJS( hud, WithConfig( std::string( "var D2H_marks=" ) + marksJsArray + ";\n" + pushMarkersJS ).c_str() );
+		RunJS( hud, WithConfig( std::string( "var D2H_marks=" ) + marksJsArray + ";\nvar D2H_hidden=" + hiddenJsObject + ";\n" + pushMarkersJS ).c_str() );
 }
 
 void UI::UpdateGround()

@@ -34,8 +34,8 @@ namespace Hooks
     inline panorama::IUIPanel* hudPanel = nullptr;
 }
 
-// Networked particles (CUserMsg_ParticleManager) matched to the collections the client builds for them
+// Networked particles (CUserMsg_ParticleManager): the resource id names a particle system once the client has built one
 namespace NetParticles
 {
-    void OnCollectionCreated( const char* name );
+    void OnCollectionCreated( uint64_t resourceId, const char* name );
 }

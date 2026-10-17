@@ -22,6 +22,7 @@ struct ClassOffsets
     int replicatingHero = -1; // illusions
     int isLocalController = -1;
     int taggedVisible = -1;
+    int unitName = -1;       // m_iszUnitName, "npc_dota_hero_elder_titan"
 };
 
 static ClassOffsets& OffsetsFor( CSchemaClassBinding* b )
@@ -41,6 +42,7 @@ static ClassOffsets& OffsetsFor( CSchemaClassBinding* b )
     o.replicatingHero = info.FindField( "m_hReplicatingOtherHeroModel" );
     o.isLocalController = info.FindField( "m_bIsLocalPlayerController" );
     o.taggedVisible = info.FindField( "m_iTaggedAsVisibleByTeam" );
+    o.unitName = info.FindField( "m_iszUnitName" );
 
     o.sceneNode = info.FindField( "m_pGameSceneNode" );
     SchemaClassInfo sceneNode = Schema::FindClass( "CGameSceneNode" );
@@ -54,27 +56,6 @@ static ClassOffsets& OffsetsFor( CSchemaClassBinding* b )
 
 template<typename T>
 static T Read( void* base, int offset ) { return *reinterpret_cast<T*>( reinterpret_cast<char*>( base ) + offset ); }
-
-// C_DOTA_Unit_Hero_BountyHunter -> npc_dota_hero_bounty_hunter; most classes map by lowercasing alone
-static std::string NpcName( const char* className )
-{
-    static const char* splitNames[] = { "BountyHunter", "ChaosKnight", "CrystalMaiden", "DarkSeer", "DarkWillow", "DeathProphet", "DoomBringer",
-        "DragonKnight", "DrowRanger", "EarthSpirit", "EmberSpirit", "FacelessVoid", "KeeperOfTheLight", "LoneDruid", "MonkeyKing", "NightStalker",
-        "PhantomAssassin", "PhantomLancer", "SandKing", "ShadowShaman", "SkeletonKing", "SpiritBreaker", "StormSpirit", "TemplarAssassin",
-        "TrollWarlord", "WitchDoctor" };
-    const char* suffix = className + strlen( "C_DOTA_Unit_Hero_" );
-    bool split = false;
-    for( const char* s : splitNames )
-        if( !strcmp( s, suffix ) ){ split = true; break; }
-
-    std::string name = "npc_dota_hero_";
-    for( const char* c = suffix; *c; c++ ){
-        if( split && c != suffix && *c >= 'A' && *c <= 'Z' && c[-1] >= 'a' && c[-1] <= 'z' )
-            name += '_';
-        name += (char)( ( *c >= 'A' && *c <= 'Z' ) ? *c + 32 : *c );
-    }
-    return name;
-}
 
 struct Track
 {
@@ -166,11 +147,12 @@ void LastSeen::Tick()
                 continue;
             }
 
-            if( strncmp( cls, "C_DOTA_Unit_Hero_", 17 ) != 0 || strstr( cls, "Beastmaster_" ) )
+            // hero classes are C_DOTA_Unit_Hero_X or, for newer heroes, CDOTA_Unit_Hero_X (Elder Titan, ...)
+            if( !strstr( cls, "DOTA_Unit_Hero_" ) || strstr( cls, "Beastmaster_" ) )
                 continue;
 
             ClassOffsets& o = OffsetsFor( binding );
-            if( o.teamNum < 0 || o.sceneNode < 0 || o.absOrigin < 0 )
+            if( o.teamNum < 0 || o.sceneNode < 0 || o.absOrigin < 0 || o.unitName < 0 )
                 continue;
             int team = Read<int>( entity, o.teamNum );
             if( localTeam < 0 || team == localTeam )
@@ -178,10 +160,14 @@ void LastSeen::Tick()
             if( o.replicatingHero >= 0 && Read<uint32_t>( entity, o.replicatingHero ) != 0xFFFFFFFF )
                 continue; // illusion
 
+            const char* unitName = Read<const char*>( entity, o.unitName );
+            if( !unitName || !*unitName )
+                continue;
+
             Track& t = tracks[entity];
             t.lastScanMs = now;
             if( t.npcName.empty() ){
-                t.npcName = NpcName( cls );
+                t.npcName = unitName;
                 t.index = c * MAX_ENTITIES_IN_LIST + i;
             }
 
@@ -225,9 +211,11 @@ void LastSeen::Tick()
     for( auto it = tracks.begin(); it != tracks.end(); )
         it = ( it->second.lastScanMs != now ) ? tracks.erase( it ) : std::next( it );
 
-    std::string marks = "[";
+    std::string marks = "[", hidden = "{";
     for( auto& kv : tracks ){
         Track& t = kv.second;
+        if( !t.visible )
+            hidden += std::to_string( t.index ) + ":1,";
         if( t.visible || !t.everSeen )
             continue;
         float age = ( now - t.lastUpdateMs ) / 1000.0f;
@@ -266,6 +254,7 @@ void LastSeen::Tick()
         }
     }
     marks += "]";
+    hidden += "}";
 
-    UI::PushMarkers( marks.c_str() );
+    UI::PushMarkers( marks.c_str(), hidden.c_str() );
 }

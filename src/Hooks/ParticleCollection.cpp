@@ -8,6 +8,6 @@ CParticleCollection* Hooks::CreateParticleCollection( CParticleSystemMgr* thispt
 
     const char* name = ( binding && binding->info ) ? binding->info->name : nullptr; // same null checks as CResourceSystem::GetResourceName
     if( name )
-        NetParticles::OnCollectionCreated( name );
+        NetParticles::OnCollectionCreated( binding->resourceId, name );
     return collection;
 }

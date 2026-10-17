@@ -8,6 +8,7 @@ A native helper library for **Dota 2 on Linux**. It is injected into the running
 | **Camera distance** | Keeps the camera at the distance you choose (800–3000) |
 | **Enemy last-seen** | Marks where every enemy hero was last visible, on the minimap and in the world, with an age timer |
 | **Teleport tracker** | Shows where an enemy hero is teleporting to — even into the fog of war — with a countdown until they land; the spot becomes their last-seen position when they arrive |
+| **Ability cooldowns** | Ability icons under every hero on screen (allies and visible enemies) with cooldown seconds and level pips; unleveled abilities are greyed |
 
 Everything is done in memory: no game files are modified and no ConVars are changed.
 
