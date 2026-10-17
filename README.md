@@ -1,4 +1,4 @@
-# Dota2Helper
+# Dota 2 Linux Free cheat (menu on END)
 
 A native helper library for **Dota 2 on Linux**. It is injected into the running game and adds a small Panorama menu with:
 
