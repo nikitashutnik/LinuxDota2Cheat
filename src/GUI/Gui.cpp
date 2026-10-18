@@ -63,7 +63,7 @@ static const char* destroyMenuJS = // in game the menu sits under HUDElements an
 // in the tree is the collapsed hotkey map #overlaymap), finds or creates the icons by id, places them and hides the rest.
 // Nothing outlives one run, so a new HUD or context needs no setup. Logs its state when it changes, and every 10 s.
 // It also (re)defines D2H_ground, which UI::UpdateGround calls every few ms: ground icons follow the camera.
-static const char* pushMarkersJS = R"JS(var D2H_sig, D2H_g, D2H_gstate;
+static const char* pushMarkersJS = R"JS(var D2H_sig, D2H_g, D2H_gstate, D2H_wst, D2H_wards;
 // "12s" under a marker icon (seconds since the enemy was last seen), or "TP 2s" left until a teleport lands, centred on cx
 D2H_timer=function(p,id,m,cx,top,w,fs){
   var lb=p.FindChild(id), t=m.t?'TP '+Math.max(0,Math.ceil(m.c-m.a))+'s':Math.floor(m.a)+'s';
@@ -101,12 +101,54 @@ D2H_cds=function(g){
     row.style.position=(x/g.actualuiscale_x-k*13)+'px '+(y/g.actualuiscale_y+28)+'px 0px'; row.visible=true;
   }
 };
+// enemy ward tracker: counts observer/sentry charges while an enemy is visible (fogged data is frozen); a drop means a ward
+// was placed - on the spot if we never lost him, otherwise somewhere between where he vanished and where he reappeared
+D2H_wst=D2H_wst||{}; D2H_wards=D2H_wards||[];
+D2H_wardscan=function(){
+  var heroes=Entities.GetAllHeroEntities(), now=Game.GetGameTime();
+  for(var h=0;h<heroes.length;h++){
+    var e=heroes[h];
+    if(!Entities.IsEnemy(e)||Entities.IsIllusion(e)) continue;
+    var st=D2H_wst[e]||(D2H_wst[e]={obs:-1,sen:-1,vis:false});
+    if(D2H_hidden[e]||!Entities.IsAlive(e)){ if(st.vis){ st.vis=false; st.lt=now; st.lx=st.cx; st.ly=st.cy; st.lz=st.cz; } continue; }
+    var obs=0,sen=0;
+    for(var s=0;s<9;s++){ var it=Entities.GetItemInSlot(e,s); if(it==-1) continue; var n=Abilities.GetAbilityName(it);
+      if(n=='item_ward_dispenser'){ obs+=Items.GetCurrentCharges(it); sen+=Items.GetSecondaryCharges(it); }
+      else if(n=='item_ward_observer') obs+=Items.GetCurrentCharges(it); else if(n=='item_ward_sentry') sen+=Items.GetCurrentCharges(it); }
+    var o=Entities.GetAbsOrigin(e);
+    if(st.obs>=0) [['obs',st.obs-obs,360],['sen',st.sen-sen,420]].forEach(function(k){
+      if(k[1]<=0) return;
+      var w={k:k[0],n:k[1],t:now,life:k[2],x:o[0],y:o[1],z:o[2],r:300};
+      if(!st.vis){ var dx=o[0]-st.lx, dy=o[1]-st.ly, d=Math.sqrt(dx*dx+dy*dy);
+        if(st.lx===undefined||d>4000){ w.x=st.lx===undefined?o[0]:st.lx; w.y=st.lx===undefined?o[1]:st.ly; w.r=1500; }
+        else { w.x=(o[0]+st.lx)/2; w.y=(o[1]+st.ly)/2; w.r=Math.min(1800,d/2+400); } }
+      D2H_wards.push(w);
+    });
+    st.obs=obs; st.sen=sen; st.vis=true; st.cx=o[0]; st.cy=o[1]; st.cz=o[2];
+  }
+  D2H_wards=D2H_wards.filter(function(w){ return now-w.t<w.life; });
+};
+// yellow circle panel `id` under p, centre (cx,cy) radius rp in layout px
+D2H_circle=function(p,id,w,cx,cy,rp,fs){
+  var c=p.FindChild(id);
+  if(!c){ c=$.CreatePanel('Panel',p,id); c.hittest=false; var s=c.style; s.borderRadius='50%'; s.border='2px solid #ffd020'; s.backgroundColor='#ffd02028';
+    var l=$.CreatePanel('Label',c,''); l.hittest=false; var ls=l.style; ls.horizontalAlign='center'; ls.verticalAlign='center'; ls.fontSize=fs+'px'; ls.fontWeight='bold'; ls.color='#ffe060'; ls.textShadow='0px 0px 3px 4.0 #000000'; }
+  c.style.width=c.style.height=(2*rp)+'px'; c.style.position=(cx-rp)+'px '+(cy-rp)+'px 0px';
+  var t=w.k+(w.n>1?' x'+w.n:'')+' '+Math.floor(Game.GetGameTime()-w.t)+'s', l=c.GetChild(0); if(l.text!=t) l.text=t;
+  c.visible=true;
+};
 D2H_ground=function(){
   var g=D2H_g, shown='';
   if(!(g&&g.IsValid()&&g.actualuiscale_x)) return;
   try{
     for(var i=0;i<g.GetChildCount();i++) g.GetChild(i).visible=false;
     D2H_cds(g);
+    D2H_wardscan();
+    D2H_wards.forEach(function(w,i){
+      var x=Game.WorldToScreenX(w.x,w.y,w.z), y=Game.WorldToScreenY(w.x,w.y,w.z), xr=Game.WorldToScreenX(w.x+w.r,w.y,w.z);
+      if(x<-2000||y<-2000||x>Game.GetScreenWidth()+2000||y>Game.GetScreenHeight()+2000) return;
+      D2H_circle(g,'gw'+Math.round(w.t*1000)+w.k,w,x/g.actualuiscale_x,y/g.actualuiscale_y,Math.abs(xr-x)/g.actualuiscale_x,16);
+    });
     if(D2H_cfg.on) D2H_marks.forEach(function(m){
       var x=Game.WorldToScreenX(m.x,m.y,m.z), y=Game.WorldToScreenY(m.x,m.y,m.z);
       if(!(x>=0&&y>=0&&x<=Game.GetScreenWidth()&&y<=Game.GetScreenHeight())) return;
@@ -146,6 +188,9 @@ try{
       ic.visible=true;
       D2H_timer(o,'t'+id,m,px,py+sz,30,11);
       ids+=' '+id; pos+=' '+id+'='+Math.round(px)+','+Math.round(py);
+    });
+    if(c.on&&w&&typeof D2H_wards=='object') D2H_wards.forEach(function(wd){
+      D2H_circle(o,'mw'+Math.round(wd.t*1000)+wd.k,wd,(wd.x-c.x0)/c.span*w,(c.y0-wd.y)/c.span*h,wd.r/c.span*w,9);
     });
   }
 }catch(e){ state='error_'+e; }

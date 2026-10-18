@@ -9,6 +9,7 @@ A native helper library for **Dota 2 on Linux**. It is injected into the running
 | **Enemy last-seen** | Marks where every enemy hero was last visible, on the minimap and in the world, with an age timer |
 | **Teleport tracker** | Shows where an enemy hero is teleporting to — even into the fog of war — with a countdown until they land; the spot becomes their last-seen position when they arrive |
 | **Ability cooldowns** | Ability icons under every hero on screen (allies and visible enemies) with cooldown seconds and level pips; unleveled abilities are greyed |
+| **Ward tracker** | Watches the ward charges of every visible enemy hero; when a charge is spent, a yellow area where the observer/sentry was placed appears in the world and on the minimap (narrow if the hero stayed visible, wider if it went through the fog), with a timer until it expires |
 
 Everything is done in memory: no game files are modified and no ConVars are changed.
 
@@ -144,6 +145,7 @@ Markers:
 
 - **Red ring** — enemy hero last seen here, with `12s` = seconds since.
 - **Blue ring** — enemy hero teleporting here, with `TP 2s` = seconds until they land. A cancelled teleport removes the marker; a finished one turns it into a red last-seen marker at the destination.
+- **Yellow circle** — an enemy ward was probably placed inside, with `obs 12s` / `sen x2 5s` = kind, count and seconds since.
 
 Logs go to `/tmp/d2h_debug.log` (recreated on every injection). The client schema (every networked class with field offsets) is dumped to `~/.config/dota2helper_schema.txt` on start — handy when the game updates.
 
