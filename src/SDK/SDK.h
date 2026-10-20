@@ -31,6 +31,7 @@
 #include "CViewSetup.h"
 #include "CDotaFogOfWarSystem.h"
 #include "CDotaCamera.h"
+#include "CDotaAbility.h"
 #include "CGameEventManager.h"
 #include "CNetworkGameClient.h"
 #include "CSoundOPSystem.h"

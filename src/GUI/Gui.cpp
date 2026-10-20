@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string>
 #include <set>
+#include <sys/stat.h>
 
 #include "../Interfaces.h"
 #include "../Settings.h"
@@ -62,8 +63,8 @@ static const char* destroyMenuJS = // in game the menu sits under HUDElements an
 // The whole minimap overlay, run on every push in the current HUD context: finds #minimap by id (the first DOTAMinimap
 // in the tree is the collapsed hotkey map #overlaymap), finds or creates the icons by id, places them and hides the rest.
 // Nothing outlives one run, so a new HUD or context needs no setup. Logs its state when it changes, and every 10 s.
-// It also (re)defines D2H_ground, which UI::UpdateGround calls every few ms: ground icons follow the camera.
-static const char* pushMarkersJS = R"JS(var D2H_sig, D2H_g, D2H_gstate, D2H_wst, D2H_wards;
+// It also (re)defines D2H_ground, which places the ground icons every Panorama frame at the positions from UI::UpdateGround.
+static const char* pushMarkersJS = R"JS(var D2H_sig, D2H_g, D2H_gstate, D2H_wst, D2H_wards, D2H_loop, D2H_bld, D2H_clk, D2H_mm, D2H_tl;
 // "12s" under a marker icon (seconds since the enemy was last seen), or "TP 2s" left until a teleport lands, centred on cx
 D2H_timer=function(p,id,m,cx,top,w,fs){
   var lb=p.FindChild(id), t=m.t?'TP '+Math.max(0,Math.ceil(m.c-m.a))+'s':Math.floor(m.a)+'s';
@@ -71,83 +72,71 @@ D2H_timer=function(p,id,m,cx,top,w,fs){
   if(lb.text!=t) lb.text=t;
   lb.style.position=(cx-w/2)+'px '+top+'px 0px'; lb.visible=true;
 };
-// ability icons with cooldown seconds under every living hero on screen; fogged enemies (D2H_hidden) carry stale data and are skipped
+// ability icons with cooldown seconds under every enemy hero in sight. The game's JS entity API returns nothing in matches,
+// so D2H_units (abilities, wards) comes from the native side 4 times a second and D2H_pos (where they are) every frame
 D2H_cds=function(g){
-  var heroes=Entities.GetAllHeroEntities(), me=Players.GetPlayerHeroEntityIndex(Players.GetLocalPlayer());
-  for(var h=0;h<heroes.length;h++){
-    var e=heroes[h];
-    if(e==me||D2H_hidden[e]||!Entities.IsAlive(e)||Entities.IsIllusion(e)) continue;
-    var o=Entities.GetAbsOrigin(e), x=Game.WorldToScreenX(o[0],o[1],o[2]), y=Game.WorldToScreenY(o[0],o[1],o[2]);
-    if(!(x>=0&&y>=0&&x<=Game.GetScreenWidth()&&y<=Game.GetScreenHeight())) continue;
-    var id='cd'+e, row=g.FindChild(id);
+  var el=Game.GetGameTime()-D2H_ut;
+  D2H_units.forEach(function(u){
+    var o=D2H_pos[u.i]||[u.x,u.y,u.z], x=Game.WorldToScreenX(o[0],o[1],o[2]), y=Game.WorldToScreenY(o[0],o[1],o[2]);
+    if(!(x>=0&&y>=0&&x<=Game.GetScreenWidth()&&y<=Game.GetScreenHeight())) return;
+    var id='cd'+u.i, row=g.FindChild(id), k=0;
     if(!row){ row=$.CreatePanel('Panel',g,id); row.hittest=false; row.hittestchildren=false; row.style.flowChildren='right'; }
-    var n=Entities.GetAbilityCount(e), k=0;
-    for(var s=0;s<n;s++){
-      var a=Entities.GetAbility(e,s);
-      if(a==-1||Abilities.IsHidden(a)||Abilities.IsPassive(a)||Abilities.IsAttributeBonus(a)) continue;
+    u.ab.forEach(function(a){
       var ic=row.GetChild(k);
       if(!ic){ ic=$.CreatePanel('DOTAAbilityImage',row,''); ic.hittest=false; var st=ic.style; st.width=st.height='24px'; st.marginRight='2px';
         var lb=$.CreatePanel('Label',ic,''); lb.hittest=false; var ls=lb.style; ls.width='100%'; ls.height='100%'; ls.textAlign='center'; ls.verticalAlign='center'; ls.fontSize='15px'; ls.fontWeight='bold'; ls.color='#ffffff'; ls.textShadow='0px 0px 3px 4.0 #000000';
         var pp=$.CreatePanel('Panel',ic,''); pp.hittest=false; var ps=pp.style; ps.flowChildren='right'; ps.horizontalAlign='center'; ps.verticalAlign='bottom'; ps.marginBottom='1px'; }
-      var nm=Abilities.GetAbilityName(a); if(ic.abilityname!=nm) ic.abilityname=nm;
-      var cd=Abilities.GetCooldownTimeRemaining(a), t=cd>0?''+Math.ceil(cd):'', lb=ic.GetChild(0);
+      if(ic.abilityname!=a[0]) ic.abilityname=a[0];
+      var cd=a[3]-el, t=cd>0?''+Math.ceil(cd):'', lb=ic.GetChild(0);
       if(lb.text!=t) lb.text=t;
-      var lv=Abilities.GetLevel(a), mx=Abilities.GetMaxLevel(a), pp=ic.GetChild(1), key=lv+'/'+mx; // level pips like the ability bar
+      var lv=a[1], mx=a[2], pp=ic.GetChild(1), key=lv+'/'+mx; // level pips like the ability bar
       if(pp.D2H_key!=key){ pp.D2H_key=key; pp.RemoveAndDeleteChildren();
         for(var i=0;i<mx;i++){ var q=$.CreatePanel('Panel',pp,''); var qs=q.style; qs.width='4px'; qs.height='3px'; qs.marginRight='1px'; qs.backgroundColor=i<lv?'#f0c030':'#303030'; } }
-      ic.style.saturation=lv>0?'1':'0'; ic.style.opacity=cd>0?'0.45':'1'; ic.visible=true; k++;
-    }
+      ic.style.saturation=lv>0?'1':'0'; ic.style.opacity=cd>0?'0.4':'0.6'; ic.visible=true; k++;
+    });
     for(var r=k;r<row.GetChildCount();r++) row.GetChild(r).visible=false;
     row.style.position=(x/g.actualuiscale_x-k*13)+'px '+(y/g.actualuiscale_y+28)+'px 0px'; row.visible=true;
-  }
+  });
 };
-// enemy ward tracker: counts observer/sentry charges while an enemy is visible (fogged data is frozen); a drop means a ward
-// was placed - on the spot if we never lost him, otherwise somewhere between where he vanished and where he reappeared
+// enemy ward tracker: counts observer/sentry charges while an enemy is visible (fogged data is frozen); a drop while we keep
+// him in sight means a ward was placed on the spot. A drop found when he comes out of the fog is ignored: no telling where
 D2H_wst=D2H_wst||{}; D2H_wards=D2H_wards||[];
 D2H_wardscan=function(){
-  var heroes=Entities.GetAllHeroEntities(), now=Game.GetGameTime();
-  for(var h=0;h<heroes.length;h++){
-    var e=heroes[h];
-    if(!Entities.IsEnemy(e)||Entities.IsIllusion(e)) continue;
-    var st=D2H_wst[e]||(D2H_wst[e]={obs:-1,sen:-1,vis:false});
-    if(D2H_hidden[e]||!Entities.IsAlive(e)){ if(st.vis){ st.vis=false; st.lt=now; st.lx=st.cx; st.ly=st.cy; st.lz=st.cz; } continue; }
-    var obs=0,sen=0;
-    for(var s=0;s<9;s++){ var it=Entities.GetItemInSlot(e,s); if(it==-1) continue; var n=Abilities.GetAbilityName(it);
-      if(n=='item_ward_dispenser'){ obs+=Items.GetCurrentCharges(it); sen+=Items.GetSecondaryCharges(it); }
-      else if(n=='item_ward_observer') obs+=Items.GetCurrentCharges(it); else if(n=='item_ward_sentry') sen+=Items.GetCurrentCharges(it); }
-    var o=Entities.GetAbsOrigin(e);
-    if(st.obs>=0) [['obs',st.obs-obs,360],['sen',st.sen-sen,420]].forEach(function(k){
-      if(k[1]<=0) return;
-      var w={k:k[0],n:k[1],t:now,life:k[2],x:o[0],y:o[1],z:o[2],r:300};
-      if(!st.vis){ var dx=o[0]-st.lx, dy=o[1]-st.ly, d=Math.sqrt(dx*dx+dy*dy);
-        if(st.lx===undefined||d>4000){ w.x=st.lx===undefined?o[0]:st.lx; w.y=st.lx===undefined?o[1]:st.ly; w.r=1500; }
-        else { w.x=(o[0]+st.lx)/2; w.y=(o[1]+st.ly)/2; w.r=Math.min(1800,d/2+400); } }
-      D2H_wards.push(w);
+  var now=Game.GetGameTime(), seen={};
+  D2H_units.forEach(function(u){
+    if(!u.w) return; // enemies in sight and alive: the native side leaves out the fog and the dead
+    var e=u.i, st=D2H_wst[e]||(D2H_wst[e]={}), obs=u.w[0], sen=u.w[1], o=D2H_pos[e]||[u.x,u.y,u.z];
+    seen[e]=1;
+    if(st.vis) [['obs',st.obs-obs,360],['sen',st.sen-sen,420]].forEach(function(k){
+      if(k[1]>0) D2H_wards.push({k:k[0],n:k[1],t:now,life:k[2],x:o[0],y:o[1],z:o[2]});
     });
-    st.obs=obs; st.sen=sen; st.vis=true; st.cx=o[0]; st.cy=o[1]; st.cz=o[2];
-  }
+    st.obs=obs; st.sen=sen; st.vis=true;
+  });
+  for(var k in D2H_wst) if(!seen[k]) D2H_wst[k].vis=false;
   D2H_wards=D2H_wards.filter(function(w){ return now-w.t<w.life; });
 };
-// yellow circle panel `id` under p, centre (cx,cy) radius rp in layout px
-D2H_circle=function(p,id,w,cx,cy,rp,fs){
+// yellow ring panel `id` under p, centre (cx,cy), radii rx,ry in layout px
+D2H_mmss=function(s){ s=Math.max(0,Math.ceil(s)); return Math.floor(s/60)+':'+(s%60<10?'0':'')+s%60; };
+D2H_circle=function(p,id,w,cx,cy,rx,ry,fs){
   var c=p.FindChild(id);
-  if(!c){ c=$.CreatePanel('Panel',p,id); c.hittest=false; var s=c.style; s.borderRadius='50%'; s.border='2px solid #ffd020'; s.backgroundColor='#ffd02028';
+  if(!c){ c=$.CreatePanel('Panel',p,id); c.hittest=false; var s=c.style; s.borderRadius='50%'; s.border='2px solid #ffd020';
     var l=$.CreatePanel('Label',c,''); l.hittest=false; var ls=l.style; ls.horizontalAlign='center'; ls.verticalAlign='center'; ls.fontSize=fs+'px'; ls.fontWeight='bold'; ls.color='#ffe060'; ls.textShadow='0px 0px 3px 4.0 #000000'; }
-  c.style.width=c.style.height=(2*rp)+'px'; c.style.position=(cx-rp)+'px '+(cy-rp)+'px 0px';
-  var t=w.k+(w.n>1?' x'+w.n:'')+' '+Math.floor(Game.GetGameTime()-w.t)+'s', l=c.GetChild(0); if(l.text!=t) l.text=t;
+  c.style.width=(2*rx)+'px'; c.style.height=(2*ry)+'px'; c.style.position=(cx-rx)+'px '+(cy-ry)+'px 0px';
+  var t=w.k+(w.n>1?' x'+w.n:'')+' '+D2H_mmss(w.life-(Game.GetGameTime()-w.t)), l=c.GetChild(0); if(l.text!=t) l.text=t;
   c.visible=true;
 };
 D2H_ground=function(){
   var g=D2H_g, shown='';
-  if(!(g&&g.IsValid()&&g.actualuiscale_x)) return;
+  if(!(g&&g.IsValid()&&g.actualuiscale_x&&typeof D2H_pos=='object')) return;
   try{
     for(var i=0;i<g.GetChildCount();i++) g.GetChild(i).visible=false;
     D2H_cds(g);
     D2H_wardscan();
     D2H_wards.forEach(function(w,i){
-      var x=Game.WorldToScreenX(w.x,w.y,w.z), y=Game.WorldToScreenY(w.x,w.y,w.z), xr=Game.WorldToScreenX(w.x+w.r,w.y,w.z);
+      var x=Game.WorldToScreenX(w.x,w.y,w.z), y=Game.WorldToScreenY(w.x,w.y,w.z), r=100; // ring radius on the ground, world units
       if(x<-2000||y<-2000||x>Game.GetScreenWidth()+2000||y>Game.GetScreenHeight()+2000) return;
-      D2H_circle(g,'gw'+Math.round(w.t*1000)+w.k,w,x/g.actualuiscale_x,y/g.actualuiscale_y,Math.abs(xr-x)/g.actualuiscale_x,16);
+      var rx=Math.abs(Game.WorldToScreenX(w.x+r,w.y,w.z)-x), yf=Game.WorldToScreenY(w.x,w.y+r,w.z), yn=Game.WorldToScreenY(w.x,w.y-r,w.z); // lying flat: the far and near points squash it
+      D2H_circle(g,'gw'+Math.round(w.t*1000)+w.k,w,x/g.actualuiscale_x,(yf+yn)/2/g.actualuiscale_y,rx/g.actualuiscale_x,Math.abs(yn-yf)/2/g.actualuiscale_y,16);
     });
     if(D2H_cfg.on) D2H_marks.forEach(function(m){
       var x=Game.WorldToScreenX(m.x,m.y,m.z), y=Game.WorldToScreenY(m.x,m.y,m.z);
@@ -159,13 +148,63 @@ D2H_ground=function(){
       ic.visible=true; shown+=' '+id;
       D2H_timer(g,'t'+id,m,x/g.actualuiscale_x,y/g.actualuiscale_y+22,60,16);
     });
+    D2H_wavedots();
     D2H_gstate='ground'+(shown||'_none');
   }catch(e){ D2H_gstate='ground_error_'+e; }
+};
+// placed in Panorama's own frame, with the camera it lays out with: placed from the native render-end stage it lagged a frame
+if(!D2H_loop){ D2H_loop=1; (function tick(){ D2H_ground(); $.Schedule(0,tick); })(); }
+// enemy creep waves out of sight, walking their lanes: one leaves each enemy barracks every 30 s of the game clock at 325/s
+// (npc_units.txt), along the lane through both sides' towers, until our first creep or standing tower on it would see it
+D2H_bld=D2H_bld||{}; D2H_clk=D2H_clk||{};
+D2H_waves=function(lb){ // the top bar's clock label -> [[x,y],...]
+  var out=[], m=lb&&lb.IsValid()&&/^(-?)(?:(\d+):)?(\d+):(\d\d)$/.exec(lb.text), creeps=[];
+  if(typeof D2H_lane!='object'||!m) return out;
+  var sec=((+m[2]||0)*3600+(+m[3])*60+(+m[4]))*(m[1]?-1:1), now=Game.GetGameTime();
+  if(D2H_clk.s!==sec) D2H_clk={s:sec,t:now}; // the clock shows whole seconds: the game time since it last ticked is the fraction
+  var clock=sec+Math.min(1,now-D2H_clk.t), us=D2H_lane.t==2?'npc_dota_goodguys':'npc_dota_badguys', them=D2H_lane.t==2?'npc_dota_badguys':'npc_dota_goodguys';
+  D2H_lane.p.forEach(function(p){ if(p[0]) D2H_bld[p[0]]=p; else if(p[3]) creeps.push(p); }); // a fallen tower keeps its spot on the lane
+  ['top','mid','bot'].forEach(function(lane){
+    var B=function(n){ return D2H_bld[n+'_'+lane]; }, pts=[], g1=B('npc_dota_goodguys_tower1')||B('npc_dota_goodguys_tower2'), b1=B('npc_dota_badguys_tower1')||B('npc_dota_badguys_tower2');
+    [them+'_melee_rax',them+'_tower3',them+'_tower2',them+'_tower1'].forEach(function(n){ if(B(n)) pts.push(B(n)); });
+    if(lane!='mid'&&g1&&b1) pts.push(['',lane=='top'?g1[1]:b1[1],lane=='top'?b1[2]:g1[2],0]); // a side lane turns in the corner: radiant's run up the left and along the bottom
+    [us+'_tower1',us+'_tower2',us+'_tower3',us+'_melee_rax'].forEach(function(n){ if(B(n)) pts.push(B(n)); });
+    if(pts.length<2) return;
+    var len=[0], front;
+    for(var i=1;i<pts.length;i++) len.push(len[i-1]+Math.hypot(pts[i][1]-pts[i-1][1],pts[i][2]-pts[i-1][2]));
+    front=len[len.length-1];
+    pts.forEach(function(p,i){ if(p[0].indexOf(us)==0&&p[3]) front=Math.min(front,len[i]-1800); }); // a standing tower of ours sees 1800 ahead
+    creeps.forEach(function(c){ // and a creep of ours on this lane 700
+      for(var i=1;i<pts.length;i++){
+        var ax=pts[i-1][1], ay=pts[i-1][2], dx=pts[i][1]-ax, dy=pts[i][2]-ay, l=Math.hypot(dx,dy)||1, u=Math.max(0,Math.min(1,((c[1]-ax)*dx+(c[2]-ay)*dy)/(l*l)));
+        if(Math.hypot(c[1]-ax-u*dx,c[2]-ay-u*dy)<1200) front=Math.min(front,len[i-1]+u*l-700);
+      }
+    });
+    for(var j=0;j<3;j++){ // the waves that left at the last three :00/:30
+      var t0=(Math.floor(clock/30)-j)*30, s=325*(clock-t0);
+      if(t0<0||s>=front) continue;
+      for(var i=1;i<pts.length;i++) if(s<=len[i]){ var u=(s-len[i-1])/((len[i]-len[i-1])||1); out.push([pts[i-1][1]+u*(pts[i][1]-pts[i-1][1]),pts[i-1][2]+u*(pts[i][2]-pts[i-1][2])]); break; }
+    }
+  });
+  return out;
+};
+// the dots glide: they move every frame, the rest of the minimap overlay 4 times a second
+D2H_wavedots=function(){
+  var o=D2H_mm, c=D2H_cfg, k=0, d;
+  if(!(o&&o.IsValid())) return;
+  var w=o.actuallayoutwidth/o.actualuiscale_x, h=o.actuallayoutheight/o.actualuiscale_y;
+  if(c.on&&w) D2H_waves(D2H_tl).forEach(function(p){ // an enemy wave out of sight on its lane: orange dot
+    var id='wv'+k++, ic=o.FindChild(id);
+    if(!ic){ ic=$.CreatePanel('Panel',o,id); ic.hittest=false; var ws=ic.style; ws.width=ws.height='10px'; ws.borderRadius='50%'; ws.backgroundColor='#e07010d0'; ws.border='1px solid #000000'; }
+    ic.style.position=((p[0]-c.x0)/c.span*w-5)+'px '+((c.y0-p[1])/c.span*h-5)+'px 0px'; ic.visible=true;
+  });
+  for(;(d=o.FindChild('wv'+k));k++) d.visible=false;
 };
 (function(){
 var r=$.GetContextPanel(); while(r.GetParent()) r=r.GetParent();
 var c=D2H_cfg, state='no_minimap_under_'+r.id, ids='', pos='';
 try{
+  var tb=r.FindChildTraverse('topbar');
   if(!(D2H_g&&D2H_g.IsValid())){ // first child of HUDElements: under every HUD element, and not mirrored by .HUDFlipped
     var e=r.FindChildTraverse('HUDElements')||r; D2H_g=e.FindChild('D2HGround');
     if(!D2H_g){ D2H_g=$.CreatePanel('Panel',e,'D2HGround'); D2H_g.hittest=false; D2H_g.hittestchildren=false; D2H_g.style.width='100%'; D2H_g.style.height='100%'; e.MoveChildBefore(D2H_g,e.GetChild(0)); }
@@ -175,7 +214,8 @@ try{
   if(o){
     var w=o.actuallayoutwidth/o.actualuiscale_x, h=o.actuallayoutheight/o.actualuiscale_y;
     state='map_'+Math.round(w)+'x'+Math.round(h)+'_on='+c.on;
-    for(var i=0;i<o.GetChildCount();i++) o.GetChild(i).visible=false;
+    D2H_mm=o; D2H_tl=tb&&tb.FindChildTraverse('GameTime');
+    for(var i=0;i<o.GetChildCount();i++) if(!/^wv/.test(o.GetChild(i).id)) o.GetChild(i).visible=false; // the wave dots are D2H_wavedots'
     if(c.on&&w) D2H_marks.forEach(function(m){
       var id=m.n+m.i, ic=o.FindChild(id), sz=10;
       var px=(m.x-c.x0)/c.span*w, py=(c.y0-m.y)/c.span*h;
@@ -190,7 +230,23 @@ try{
       ids+=' '+id; pos+=' '+id+'='+Math.round(px)+','+Math.round(py);
     });
     if(c.on&&w&&typeof D2H_wards=='object') D2H_wards.forEach(function(wd){
-      D2H_circle(o,'mw'+Math.round(wd.t*1000)+wd.k,wd,(wd.x-c.x0)/c.span*w,(c.y0-wd.y)/c.span*h,wd.r/c.span*w,9);
+      D2H_circle(o,'mw'+Math.round(wd.t*1000)+wd.k,wd,(wd.x-c.x0)/c.span*w,(c.y0-wd.y)/c.span*h,4,4,9);
+    });
+  }
+  // enemy health and mana in the top bar: the game has both bars under every portrait, but feeds and shows only allies'
+  for(var pid=0;tb&&typeof D2H_bars=='object'&&pid<10;pid++){
+    var s=tb.FindChildTraverse((pid<5?'RadiantPlayer':'DirePlayer')+pid), hi=s&&s.FindChildTraverse('HeroImage');
+    if(!hi||!s.BHasClass('EnemyTeam')) continue;
+    var b=D2H_bars['npc_dota_hero_'+hi.heroname], dead=s.BHasClass('Dead'); // [health,max,mana,max,visible]
+    ['HealthBar','ManaBar'].forEach(function(id,k){
+      var bar=s.FindChildTraverse(id); if(!bar) return;
+      bar.style.opacity=b&&!dead?(b[4]?'1':'0.5'):'0'; // dimmed: the values from before he went into the fog
+      bar.style.height='12px'; bar.style.transform='translateY('+(15+4*k)+'px)'; // under the portrait, where Alt puts the allies' 8px bars
+      if(!b) return;
+      var v=b[2*k], mx=b[2*k+1], t=v+'/'+mx, lb=bar.FindChild('D2HText');
+      bar.value=mx>0?v/mx:0;
+      if(!lb){ lb=$.CreatePanel('Label',bar,'D2HText'); lb.hittest=false; var ls=lb.style; ls.width='100%'; ls.textAlign='center'; ls.verticalAlign='center'; ls.fontSize='10px'; ls.fontWeight='bold'; ls.color='#ffffff'; ls.textShadow='0px 0px 2px 3.0 #000000'; }
+      if(lb.text!=t) lb.text=t;
     });
   }
 }catch(e){ state='error_'+e; }
@@ -199,6 +255,7 @@ if(sig!=D2H_sig){ D2H_sig=sig; $.CreatePanel('Panel',r,('D2HLOG:'+Date.now()+'_0
 })();)JS";
 
 static const char* devScriptPath = "/tmp/d2h_run.js";
+static const char* overlayScriptPath = "/tmp/d2h_overlay.js";
 
 static panorama::IUIPanel* HudPanel()
 {
@@ -301,7 +358,7 @@ void UI::RunDevScript()
 	RunJS( ContextPanel(), WithConfig( js ).c_str() );
 }
 
-void UI::PushMarkers( const char* marksJsArray, const char* hiddenJsObject )
+void UI::PushMarkers( const char* marksJsArray, const char* unitsJsArray, const char* barsJsObject, const char* lanesJsObject )
 {
 	static panorama::IUIPanel* last = nullptr;
 	panorama::IUIPanel* hud = HudPanel();
@@ -309,14 +366,25 @@ void UI::PushMarkers( const char* marksJsArray, const char* hiddenJsObject )
 		last = hud;
 		Logger::Log( "markers: HUD context %p", (void*)hud );
 	}
-	if( hud )
-		RunJS( hud, WithConfig( std::string( "var D2H_marks=" ) + marksJsArray + ";\nvar D2H_hidden=" + hiddenJsObject + ";\n" + pushMarkersJS ).c_str() );
+	if( !hud )
+		return;
+	static std::string overlay; // /tmp/d2h_overlay.js overrides the built-in script while it exists, re-read on every change
+	static long overlayMtime = -1;
+	struct stat st;
+	long mtime = stat( overlayScriptPath, &st ) == 0 ? (long)st.st_mtime : 0;
+	if( mtime != overlayMtime ){
+		overlayMtime = mtime;
+		if( !mtime || !ReadFile( overlayScriptPath, overlay ) )
+			overlay.clear();
+		Logger::Log( "overlay script: %s", overlay.empty() ? "built-in" : overlayScriptPath );
+	}
+	RunJS( hud, WithConfig( std::string( "var D2H_marks=" ) + marksJsArray + ";\nvar D2H_units=" + unitsJsArray + ";\nvar D2H_bars=" + barsJsObject + ";\nvar D2H_lane=" + lanesJsObject + ";\nvar D2H_ut=Game.GetGameTime();\n" + ( overlay.empty() ? pushMarkersJS : overlay.c_str() ) ).c_str() );
 }
 
-void UI::UpdateGround()
+void UI::UpdateGround( const char* positionsJsObject )
 {
 	if( panorama::IUIPanel* hud = HudPanel() )
-		RunJS( hud, "typeof D2H_ground=='function'&&D2H_ground();" );
+		RunJS( hud, ( std::string( "var D2H_pos=" ) + positionsJsObject + ";" ).c_str() );
 }
 
 
@@ -357,6 +425,12 @@ void UI::PollBridge()
 		const char* id = *reinterpret_cast<const char**>( reinterpret_cast<char*>( panel ) + 0x10 ); // CUIPanel::m_pszID
 		if( id && !strcmp( id, "minimap" ) )
 			ReadOverview( panel );
+		// The in-game HUD root (hud_reborn.xml). RunScript can't be trusted for this: scripts compile on child panels and the
+		// versus screen's scene panels (DireScene) come later with a JS context that has no entity API
+		if( id && !strcmp( id, "Hud" ) && panel != Hooks::hudPanel ){
+			Hooks::hudPanel = panel;
+			Logger::Log( "HUD context %p from the panel table", (void*)panel );
+		}
 		if( !id || strncmp( id, "D2H", 3 ) != 0 )
 			continue;
 

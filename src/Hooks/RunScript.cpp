@@ -9,9 +9,6 @@ int Hooks::RunScript( panorama::UIEngine* thisptr, panorama::IUIPanel* panel, co
 {
     auto original = uiEngineVMT->GetOriginalMethod<RunScriptFn>( kRunScriptSlot );
 
-    if( path && ( strstr( path, "scripts/hud" ) || strstr( path, "/hud_" ) ) )
-        hudPanel = panel;
-
     static int logged = 0;
     if( logged < 8 || ( path && strstr( path, "popup" ) ) ){
         logged++;

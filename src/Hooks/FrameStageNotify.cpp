@@ -32,8 +32,12 @@ void Hooks::FrameStageNotify( CSource2Client *thisptr, ClientFrameStage_t stage 
         UI::PollBridge();
         Zoom::Tick();
         LastSeen::Tick(); // also when switched off: its push then carries on:0, which hides the icons
-        UI::UpdateGround();
     }
+    // Where the heroes under the ground overlay are, read exactly once per rendered frame after it is drawn; the JS places the
+    // icons in Panorama's own frame. From the throttled block above they jittered: at high frame rates that block skips
+    // frames and lands on a different stage from frame to frame.
+    if( stage == FRAME_RENDER_END )
+        UI::UpdateGround( LastSeen::Positions().c_str() );
 
     clientVMT->GetOriginalMethod<FrameStageNotifyFn>( 36 )( thisptr, stage );
 }

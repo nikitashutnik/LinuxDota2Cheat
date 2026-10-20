@@ -355,3 +355,8 @@ public:
     virtual void C_BaseFlex__ProcessSequenceSceneEvent();
     virtual void C_BaseFlex__ClearSceneEvent();
 };
+
+// C_BaseEntity::GetAbsOrigin(): when the scene node's transform is dirty (node+0x120) it recomputes it first, then returns
+// &node->m_vecAbsOrigin. Reading m_vecAbsOrigin directly can give a stale position, which made the ability rows jitter.
+typedef const float* (* EntityGetAbsOriginFn)( CBaseEntity* entity );
+inline EntityGetAbsOriginFn EntityGetAbsOrigin;

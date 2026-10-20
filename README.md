@@ -8,8 +8,10 @@ A native helper library for **Dota 2 on Linux**. It is injected into the running
 | **Camera distance** | Keeps the camera at the distance you choose (800–3000) |
 | **Enemy last-seen** | Marks where every enemy hero was last visible, on the minimap and in the world, with an age timer |
 | **Teleport tracker** | Shows where an enemy hero is teleporting to — even into the fog of war — with a countdown until they land; the spot becomes their last-seen position when they arrive |
-| **Ability cooldowns** | Ability icons under every hero on screen (allies and visible enemies) with cooldown seconds and level pips; unleveled abilities are greyed |
-| **Ward tracker** | Watches the ward charges of every visible enemy hero; when a charge is spent, a yellow area where the observer/sentry was placed appears in the world and on the minimap (narrow if the hero stayed visible, wider if it went through the fog), with a timer until it expires |
+| **Ability cooldowns** | Semi-transparent ability icons under every visible enemy hero, with cooldown seconds and level pips; unleveled abilities are greyed |
+| **Ward tracker** | Watches the ward charges of every visible enemy hero; when one is spent in sight, a yellow ring lying on the ground where the observer/sentry went down appears in the world and on the minimap, counting down to when the ward expires |
+| **Enemy health and mana** | Fills the game's own health and mana bars under the enemy portraits in the top bar, with numbers; the last values seen stay dimmed while the hero is in the fog |
+| **Creep waves** | Enemy creep waves out of sight on the minimap, walking their lanes from the enemy barracks until our creeps or towers would see them |
 
 Everything is done in memory: no game files are modified and no ConVars are changed.
 
@@ -145,9 +147,12 @@ Markers:
 
 - **Red ring** — enemy hero last seen here, with `12s` = seconds since.
 - **Blue ring** — enemy hero teleporting here, with `TP 2s` = seconds until they land. A cancelled teleport removes the marker; a finished one turns it into a red last-seen marker at the destination.
-- **Yellow circle** — an enemy ward was probably placed inside, with `obs 12s` / `sen x2 5s` = kind, count and seconds since.
+- **Yellow ring** — an enemy ward placed here, with `obs 5:43` / `sen x2 6:59` = kind, count and time left.
+- **Orange dot** (minimap) — an enemy creep wave in the fog, on its way along the lane.
 
 Logs go to `/tmp/d2h_debug.log` (recreated on every injection). The client schema (every networked class with field offsets) is dumped to `~/.config/dota2helper_schema.txt` on start — handy when the game updates.
+
+While `/tmp/d2h_overlay.js` exists it replaces the built-in overlay script and is re-read whenever it changes, so the overlay can be changed without reinjecting (development helper).
 
 ---
 
@@ -159,7 +164,7 @@ Logs go to `/tmp/d2h_debug.log` (recreated on every injection). The client schem
 |---|---|---|
 | `autoaccept` | `1` | Accept found matches |
 | `camera_distance` | `0` | Camera distance; `0` leaves the game's camera alone |
-| `lastseen` | `1` | Last-seen and teleport markers |
+| `lastseen` | `1` | Last-seen, teleport and creep wave markers |
 | `lastseen_secs` | `10` | Lifetime of a last-seen marker, seconds |
 
 ---
@@ -171,7 +176,7 @@ The library is a plain `.so` whose constructor runs when `dlopen`ed inside the g
 | Interface | Slot | Hook | Used for |
 |---|---|---|---|
 | `Source2Client002` (libclient) | 36 | `FrameStageNotify` | Per-frame tick: input, menu bridge, camera, markers |
-| `PanoramaUIEngine001` → `CUIEngine` | 78 | `RunScript` | Captures the HUD panel; auto-accept |
+| `PanoramaUIEngine001` → `CUIEngine` | 78 | `RunScript` | Auto-accept |
 | `ParticleSystemMgr003` (libparticles) | 18 | `CreateParticleCollection` | Names of particle systems the client builds |
 | `NetworkMessagesVersion001` (libnetworksystem) | 3 | `UnserializeMessage` | Every incoming net message, before the game dispatches it |
 
@@ -181,7 +186,13 @@ Field offsets (team, scene node, dormancy, …) come from the game's own schema 
 
 **Teleports.** When a hero channels a teleport, the server sends `CUserMsg_ParticleManager` messages for three effects: `teleport_start` attached to the hero, `teleport_origin` at the hero, and `teleport_end` at the destination. The client receives and builds all three even when the destination is in the fog — it only hides the effect through its fog-of-war check. The hook decodes the protobuf payload with a 40-line wire reader: a world-origin `*teleport_end*` system whose modifiers come from an enemy hero, plus its `UPDATE_TRANSFORM` for control point 0, gives the destination; control point 7 of the start effect carries the channel time (so stacked teleports show 5 s, 7 s, …); the effect's `DESTROY` before that time means the teleport was cancelled. Particle names arrive as a 64-bit resource id, resolved by pairing each `CREATE` with the collection the client builds for it.
 
-**Menu bridge.** The menu is Panorama JavaScript created at runtime. JS cannot call into the library, so it publishes its state in the id of a throw-away panel (`D2H:<timestamp>:acc=1,dist=1200,…`), which the native side reads from the UI engine's panel table.
+**Menu bridge.** The menu is Panorama JavaScript created at runtime. JS cannot call into the library, so it publishes its state in the id of a throw-away panel (`D2H:<timestamp>:acc=1,dist=1200,…`), which the native side reads from the UI engine's panel table. The same table gives the in-game HUD root (`#Hud`), whose JS context the overlay runs in.
+
+**Enemy data.** In a real match the Panorama JS entity API (`Entities.*`, `Abilities.*`, `Items.*`) returns nothing once the game is past hero selection, unless the game mode is custom — which is why such overlays only work in the hero demo. So abilities, cooldowns, ward charges, health and mana are read natively, the way the game's own getters read them, and pushed to the overlay four times a second, hero positions once per rendered frame. The overlay places its world icons in Panorama's own frame loop, with the camera Panorama lays out with.
+
+**Top bar.** Every top bar portrait already has the game's health and mana bars, but the game fills and shows them for allies only (`.EnemyTeam #HealthBar { opacity: 0 }`). The overlay fills the enemy ones and shows them with numbers.
+
+**Creep waves.** The client knows both sides' towers and barracks, so the lanes are built from them; a side lane turns in the corner between the tier-1 towers. Every 30 s of the game clock a wave leaves each enemy barracks and walks at 325 (lane creep speed from `npc_units.txt`) until it nears our first creep or standing tower on that lane, where the game shows the real creeps.
 
 ---
 
@@ -207,7 +218,7 @@ src/
   Scanner.*            byte-pattern signatures
   Settings.*           ~/.config/dota2helper.cfg
   Hooks/               FrameStageNotify, RunScript, ParticleCollection, NetMessage
-  Hacks/               Zoom (camera), LastSeen (markers + teleport tracker)
+  Hacks/               Zoom (camera), LastSeen (markers, teleports, enemy abilities/wards/health, creep lanes)
   GUI/                 Panorama JS menu and overlay, JS -> native bridge
   SDK/                 game class layouts: vtables, schema system, bit buffers
   Utils/               memory, pattern finder, VMT hooking, logger
